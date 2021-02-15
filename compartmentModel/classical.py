@@ -319,10 +319,13 @@ class Logan(torch.nn.Module):
     
     def forward(self,t,A,B):
         """
-        A: linear part of ref_inte, 2D ( _ ,1)
-        B: linear part of CT(t) or [CT(t)-CT(t1)], 2D ( _ ,im_L)
-        C: linear part of y_inte, 2D ( _ ,im_L)
-        y_inte = DVR * ref_inte + d * y
+        ordinary least square (OLS)
+            A: linear part of ref_inte, 2D ( _ ,1)
+            B: linear part of CT(t) or [CT(t)-CT(t1)], 2D ( _ ,im_L)
+            C: linear part of y_inte, 2D ( _ ,im_L)
+            y_inte = DVR * ref_inte + d * y, k = [DVR, d]
+        multilinear analysis 1 (MA1)
+            swap B with C, then the k = [-DVR/d, 1/d]
         """
         C = A * self.k[0,:] + B * self.k[1,:]
         return C

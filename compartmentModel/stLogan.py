@@ -23,7 +23,8 @@ from dpi.compartmentModel.partialconv3d import PartialConv3d
 # 
 ##############################################################################################################
 class STLogan():
-    def __init__(self,imageSize,nb_frames,mid_c=64,bP=0.5,dropP=0.5,lr_kcm=1e-3,lr_net=1e-4,log='log',device='cuda'):
+    def __init__(self,imageSize,nb_frames,mid_c=64,bP=0.5,dropP=0.5,lr_kcm=1e-3,lr_net=1e-4,log='log',device='cuda',method='ols'):
+        """ method:'ols','ma1' """
         self.device = device
         self.im_S = imageSize.astype(np.int)
         self.model_kcm = Logan(im_L=self.im_S[0]*self.im_S[1]*self.im_S[2])
@@ -34,12 +35,15 @@ class STLogan():
         self.loss_fn = Self2selfLoss()
         self.start_its = [0, 0, 0, 0]
         self.writer = SummaryWriter(log)
+        self.method = method
 
     def setdata(self,t,dy_im,ref,tf_idx,t1_idx=0):
         """设置数据：从全部动态图像中得到想要的部分"""
         self.A,self.B,self.C,self.t_ = self.data_prepare(t,dy_im,ref,tf_idx,t1_idx)
         self.C = self.C.reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
         self.dy_im_ = dy_im[t1_idx:]         # 实际采集的动态图像
+        if self.method == 'ma1':
+            self.B,self.C = self.C,self.B # 改为MA1: swap B with C
 
     def data_prepare(self,t,dy_im,ref,tf_idx,t1_idx=0):
         """
@@ -279,7 +283,7 @@ class Self2selfLoss():
 # 
 ##############################################################################################################
 class STLogan_unet(STLogan):
-    def __init__(self,imageSize,nb_frames,mid_c=64,bP=0.5,dropP=0.5,lr_kcm=1e-3,lr_net=1e-4,log='log',device='cuda'):
+    def __init__(self,imageSize,nb_frames,mid_c=64,bP=0.5,dropP=0.5,lr_kcm=1e-3,lr_net=1e-4,log='log',device='cuda',method='ols'):
         super(STLogan_unet,self).__init__(imageSize,nb_frames,mid_c=mid_c,bP=bP,dropP=dropP,lr_kcm=lr_kcm,lr_net=lr_net,log=log,device=device)
         self.model_net = UNet(in_c=nb_frames,out_c=2,mid_c=mid_c,dropP=dropP).to(device)
         self.optim_net = optim.Adam(self.model_net.parameters(), lr=lr_net)
