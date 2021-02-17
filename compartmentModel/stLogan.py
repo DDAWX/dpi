@@ -40,10 +40,10 @@ class STLogan():
     def setdata(self,t,dy_im,ref,tf_idx,t1_idx=0):
         """设置数据：从全部动态图像中得到想要的部分"""
         self.A,self.B,self.C,self.t_ = self.data_prepare(t,dy_im,ref,tf_idx,t1_idx)
-        self.C = self.C.reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
-        self.dy_im_ = dy_im[t1_idx:]         # 实际采集的动态图像
         if self.method == 'ma1':
             self.B,self.C = self.C,self.B # 改为MA1: swap B with C
+        self.C = self.C.reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
+        self.dy_im_ = dy_im[t1_idx:]         # 实际采集的动态图像
 
     def data_prepare(self,t,dy_im,ref,tf_idx,t1_idx=0):
         """
