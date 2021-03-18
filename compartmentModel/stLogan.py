@@ -109,15 +109,15 @@ class STLogan():
             im,mask = bernsample(self.dy_im_,bP=self.bP)
             self.model_kcm.k = self.model_net(im,mask).reshape(2,-1)
             C_pred = self.model_kcm(self.t_,self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
-            loss = self.loss_fn.partloss(C_pred,self.C,mask[0],roi)
+            loss = self.loss_fn.partloss(C_pred,self.C,mask[0,-self.C.shape[0]:],roi)
             loss.backward()
-            self.optim_net.step()   
+            self.optim_net.step()
             self.optim_net.zero_grad()
             self.writer.add_scalar('s2snn',loss.data.item(),it)
         self.start_its[3] = it + 1
     
     def predict(self,niter=50,roi=None):
-        k_pred = torch.zeros(1,2,self.im_S[0],self.im_S[1],self.im_S[2],device='cuda')
+        k_pred = torch.zeros(1,2,self.im_S[0],self.im_S[1],self.im_S[2],device=self.device)
         with torch.no_grad():
             for it in range(niter):
                 im, mask = bernsample(self.dy_im_,bP=self.bP)
@@ -155,24 +155,24 @@ class STLogan():
 ##############################################################################################################
 class NN_STLogan(STLogan):
     def __init__(self,imageSize,in_c,out_c=2,mid_c=64,bP=0.5,dropP=0.5,lr_kcm=1e-3,lr_net=1e-4,log='log',device='cuda',method='ols'):
-        super(NN_STLogan,self).__init__(imageSize,in_c,out_c=2,mid_c=64,bP=0.5,dropP=0.5,lr_kcm=1e-3,lr_net=1e-4,log='log',device='cuda',method='ols')
+        super(NN_STLogan,self).__init__(imageSize,in_c,out_c=out_c,mid_c=mid_c,bP=bP,dropP=dropP,lr_kcm=lr_kcm,lr_net=lr_net,log=log,device=device,method=method)
         
-    def train(self,niter=10000,roi=None):
+    def train(self,dy_im_,niter=10000,roi=None):
         for it in tqdm(range(self.start_its[3],niter)):
-            im,mask = bernsample(self.dy_im_,bP=self.bP)     
+            im,mask = bernsample(dy_im_,bP=self.bP)     
             dy_im_pred = self.model_net(im,mask)
-            loss = self.loss_fn.partloss(dy_im_pred,self.dy_im_,mask[0],roi)
+            loss = self.loss_fn.partloss(dy_im_pred,dy_im_,mask[0,-dy_im_.shape[0]:],roi)
             loss.backward()
             self.optim_net.step()   
             self.optim_net.zero_grad()
-            self.writer.add_scalar('dy_im_deniose',loss.data.item(),it)
+            self.writer.add_scalar('dy_im_pred',loss.data.item(),it)
         self.start_its[3] = it + 1
         
-    def predict(self,niter=50,roi=None):
-        dy_im_pred = torch.unsqueeze(torch.zeros(self.dy_im_.shape,device='cuda'), 0)
+    def predict(self,dy_im_,niter=50,roi=None):
+        dy_im_pred = torch.unsqueeze(torch.zeros(dy_im_.shape,device=self.device), 0)
         with torch.no_grad():
             for it in range(niter):
-                im, mask = bernsample(self.dy_im_,bP=self.bP)
+                im, mask = bernsample(dy_im_,bP=self.bP)
                 dy_im_pred += self.model_net(im,mask)
             dy_im_pred /= niter
             if roi is not None:
