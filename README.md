@@ -1,2 +1,2 @@
 # dpi
-dynamic parametric imaging
+dpi
