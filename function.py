@@ -192,7 +192,11 @@ def get_tac(dy_im,mask):
         tac[i] = im[torch.where(mask==1)].mean()
     return tac
 
-    
+
+def decay_factor(t,t_half = 109.771):
+    return np.exp( - ( np.log(2) / t_half ) * t )
+
+
 #--------------------------------------------------------------------------------------------------------------------------
 def plotShere(image,center,r,value):
     """plot a shere on the image"""
