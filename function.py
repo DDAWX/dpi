@@ -185,6 +185,14 @@ def deconv_RL(in_im,psf,niter=30):
     return out_im
 
 
+def get_tac(dy_im,mask):
+    tac = torch.zeros(dy_im.shape[0])
+    for i in range(dy_im.shape[0]):
+        im = dy_im[i]
+        tac[i] = im[torch.where(mask==1)].mean()
+    return tac
+
+    
 #--------------------------------------------------------------------------------------------------------------------------
 def plotShere(image,center,r,value):
     """plot a shere on the image"""
