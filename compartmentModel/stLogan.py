@@ -149,7 +149,7 @@ class STLogan():
                 loss = ((C_pred - self.C).pow(2)).mean() + penalty.mean()
             loss.backward()
             self.optim_kcm.step()
-            self.model_kcm.k[0,:].data.clamp_(min=0.) # DVR > 0
+            # self.model_kcm.k[0,:].data.clamp_(min=0.) # DVR > 0
             self.optim_kcm.zero_grad()
             self.writer.add_scalar('tv',loss.data.item(),it)
         self.start_its[1] = it + 1
@@ -162,18 +162,18 @@ class STLogan():
             c = k[:,1:-1,1:-1,1:-1]
             penalty1 = ( torch.abs( c - k[:,:-2,1:-1,1:-1] ) + torch.abs( c - k[:,2:,1:-1,1:-1] ) +
                         torch.abs( c - k[:,1:-1,:-2,1:-1] ) + torch.abs( c - k[:,1:-1,2:,1:-1] ) +
-                        torch.abs( c - k[:,1:-1,1:-1,:-2] ) + torch.abs( c - k[:,1:-1,1:-1,2:] ) )
+                        torch.abs( c - k[:,1:-1,1:-1,:-2] ) + torch.abs( c - k[:,1:-1,1:-1,2:] ) ) / 6
             penalty2 = ( torch.abs( c - k[:,:-2,:-2,1:-1] ) + torch.abs( c - k[:,2:,2:,1:-1]  ) +
                         torch.abs( c - k[:,2:,:-2,1:-1]  ) + torch.abs( c - k[:,:-2,2:,1:-1] ) +              
                         torch.abs( c - k[:,1:-1,:-2,:-2] ) + torch.abs( c - k[:,1:-1,2:,2:]  ) +
                         torch.abs( c - k[:,1:-1,2:,:-2]  ) + torch.abs( c - k[:,1:-1,:-2,2:] ) +               
                         torch.abs( c - k[:,:-2,1:-1,:-2] ) + torch.abs( c - k[:,2:,1:-1,2:]  ) +
-                        torch.abs( c - k[:,2:,1:-1,:-2]  ) + torch.abs( c - k[:,:-2,1:-1,2:] ) )
+                        torch.abs( c - k[:,2:,1:-1,:-2]  ) + torch.abs( c - k[:,:-2,1:-1,2:] ) ) / (12 * 1.414)
             penalty3 = ( torch.abs( c - k[:,:-2,:-2,:-2] ) + torch.abs( c - k[:,2:,2:,2:]  ) +
                         torch.abs( c - k[:,2:,:-2,:-2]  ) + torch.abs( c - k[:,:-2,2:,2:] ) +
                         torch.abs( c - k[:,:-2,2:,:-2]  ) + torch.abs( c - k[:,2:,:-2,2:] ) +
-                        torch.abs( c - k[:,:-2,:-2,2:]  ) + torch.abs( c - k[:,2:,2:,:-2] ) )
-            penalty = ( penalty1 + penalty2 / 1.414 + penalty3 / 1.732 )
+                        torch.abs( c - k[:,:-2,:-2,2:]  ) + torch.abs( c - k[:,2:,2:,:-2] ) ) / (8 * 1.732)
+            penalty = penalty1 + penalty2 + penalty3
             # loss
             if roi is not None:
                 loss = ((C_pred - self.C).pow(2) * roi).mean() + ( penalty * roi[1:-1,1:-1,1:-1] ).mean() * w
