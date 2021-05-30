@@ -24,7 +24,7 @@ from dpi.compartmentModel.partialconv3d import PartialConv3d
 ##############################################################################################################
 class STLogan():
     def __init__(self,imageSize,in_c,out_c=2,mid_c=64,bP=0.5,dropP=0.5,lr_kcm=1e-3,lr_net=1e-4,log='log',device='cuda',method='ols'):
-        """ method:'ols','ma1' """
+        """ method:'ols','ma1'为了减小Logan估计时的bias问题 """
         self.device = device
         self.im_S = imageSize.astype(np.int)
         self.model_kcm = Logan(im_L=self.im_S[0]*self.im_S[1]*self.im_S[2])
@@ -39,7 +39,7 @@ class STLogan():
 
     def setdata(self,t,dy_im,ref,tf_idx,t1_idx=0):
         """设置数据：从全部动态图像中得到想要的部分"""
-        self.A,self.B,self.C,self.t_ = self.data_prepare(t,dy_im,ref,tf_idx,t1_idx)
+        self.A,self.B,self.C = self.data_prepare(t,dy_im,ref,tf_idx,t1_idx)
         if self.method == 'ma1':
             self.B,self.C = self.C,self.B # 改为MA1: swap B with C
         self.C = self.C.reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
@@ -62,15 +62,15 @@ class STLogan():
             B = B - B[t1_idx,:]
             C = C - C[t1_idx,:]
             if t1_idx < tf_idx:
-                return A[tf_idx:,:],B[tf_idx:,:],C[tf_idx:,:],t[tf_idx:]
+                return A[tf_idx:,:],B[tf_idx:,:],C[tf_idx:,:]
             else:
-                return A[t1_idx+1:,:],B[t1_idx+1:,:],C[t1_idx+1:,:],t[t1_idx+1:]
+                return A[t1_idx+1:,:],B[t1_idx+1:,:],C[t1_idx+1:,:]
         else:
-            return A[tf_idx:,:],B[tf_idx:,:],C[tf_idx:,:],t[tf_idx:]
+            return A[tf_idx:,:],B[tf_idx:,:],C[tf_idx:,:]
 
     def fit(self,niter=10000,roi=None):
         for it in tqdm(range(self.start_its[0],niter)):
-            C_pred = self.model_kcm(self.t_,self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
+            C_pred = self.model_kcm(self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
             loss = self.loss_fn.mseloss(C_pred,self.C,roi)
             loss.backward()
             self.optim_kcm.step()
@@ -95,7 +95,7 @@ class STLogan():
         for it in tqdm(range(self.start_its[3],niter)):
             im,mask = bernsample(self.dy_im_,bP=self.bP)
             self.model_kcm.k = self.model_net(im,mask).reshape(2,-1)
-            C_pred = self.model_kcm(self.t_,self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
+            C_pred = self.model_kcm(self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
             loss = self.loss_fn.partloss(C_pred,self.C,mask[0,-self.C.shape[0]:],roi)
             loss.backward()
             self.optim_net.step()
@@ -136,7 +136,7 @@ class STLogan():
 
     def fit_tv(self,niter=10000,w=1e-2,roi=None):
         for it in tqdm(range(self.start_its[1],niter)):
-            C_pred = self.model_kcm(self.t_,self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
+            C_pred = self.model_kcm(self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
             # penalty term
             k = self.model_kcm.k.reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2]) * torch.tensor([[[[1.]]],[[[0.1]]]],device='cuda')
             penalty = torch.sqrt( ( (k[:,:-1,:-1,:-1] - k[:,1:,:-1,:-1]).pow(2) +
@@ -156,7 +156,7 @@ class STLogan():
 
     def fit_reg(self,niter=10000,w=1e-2,roi=None):
         for it in tqdm(range(self.start_its[1],niter)):
-            C_pred = self.model_kcm(self.t_,self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
+            C_pred = self.model_kcm(self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
             # penalty term
             k = self.model_kcm.k.reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2]) * torch.tensor([[[[1.]]],[[[0.1]]]],device='cuda')
             c = k[:,1:-1,1:-1,1:-1]
@@ -361,7 +361,7 @@ class Self2selfLoss():
 #         im = self.dy_im_.unsqueeze(0)
 #         for it in tqdm(range(self.start_its[3],niter)):
 #             self.model_kcm.k = self.model_net(im).reshape(2,-1)
-#             C_pred = self.model_kcm(self.t_,self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
+#             C_pred = self.model_kcm(self.A,self.B).reshape(-1,self.im_S[0],self.im_S[1],self.im_S[2])
 #             loss = self.loss_fn.mseloss(C_pred,self.C,roi)
 #             loss.backward()
 #             self.optim_net.step()   

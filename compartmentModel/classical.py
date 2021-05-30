@@ -8,21 +8,24 @@
 #################################################################################
 import numpy as np
 import torch
-from dpi.function import myConv1d, subtrapz, myInterp1d, cumintegrate
+from dpi.function import myConv1d, subtrapz, myInterp1d, cumintegrate, cumtrapz
 
 
+###############################################################################################################
+#
+# input function
+# 
+###############################################################################################################
 def fengInpFun(p,t):
     """ param:torch.tensor([]), time:torch.tensor(any dimension) """
     y = ( ( p[0] * t - p[1] - p[2] ) * torch.exp( p[3] * t ) + p[1] * torch.exp( p[4] * t ) + p[2] * torch.exp( p[5] * t ) )
     return y
-
 
 def fengInpFun_int(p,t,from_zero=False):
     """ One integral of feng input, p:torch.tensor([]), t:torch.tensor([]) """
     y = ( 1 / p[3] * ( p[0] * t * torch.exp( p[3] * t ) + ( p[0] / p[3] + p[1] + p[2] ) * ( 1 - torch.exp( p[3] * t ) ) )
         + p[1] / p[4] * ( torch.exp( p[4] * t ) - 1 ) + p[2] / p[5] * ( torch.exp( p[5] * t ) - 1 ) )
     return y if from_zero else y[1:] - y[:-1]
-
 
 def fengInpFun_int2(p,t,from_zero=True):
     """ Two integral of feng input, p:torch.tensor([]), t:torch.tensor([]) """
@@ -32,13 +35,50 @@ def fengInpFun_int2(p,t,from_zero=True):
     return y if from_zero else y[1:] - y[:-1]
 
 
-class D1T2KCM(torch.nn.Module): 
-    def __init__(self,inpParam,im_L=1,requires_fv=False,device='cuda'):
-        super(D1T2KCM,self).__init__()
+def oneExp(p,t):
+    return p[0] * torch.exp(p[1]*t)
+
+def twoExp(p,t):
+    return p[0] * torch.exp(p[1]*t) + p[2] * torch.exp(p[3]*t)
+
+def threeExp(p,t):
+    return p[0] * torch.exp(p[1]*t) + p[2] * torch.exp(p[3]*t) + p[4] * torch.exp(p[5]*t)
+
+def oneExp_int(p,tl,tu):
+    """tl(lower bound) and tu(upper bound) of the integral"""
+    return ( p[0]/p[1] ) * ( torch.exp(p[1]*tu) - torch.exp(p[1]*tl) )
+
+def twoExp_int(p,tl,tu):
+    """tl(lower bound) and tu(upper bound) of the integral"""
+    return ( p[0]/p[1] ) * ( torch.exp(p[1]*tu) - torch.exp(p[1]*tl) ) + ( p[2]/p[3] ) * ( torch.exp(p[3]*tu) - torch.exp(p[3]*tl) )
+
+def threeExp_int(p,tl,tu):
+    """tl(lower bound) and tu(upper bound) of the integral"""
+    return ( p[0]/p[1] ) * ( torch.exp(p[1]*tu) - torch.exp(p[1]*tl) ) + ( p[2]/p[3] ) * ( torch.exp(p[3]*tu) - torch.exp(p[3]*tl) ) + ( p[4]/p[5] ) * ( torch.exp(p[5]*tu) - torch.exp(p[5]*tl) )
+
+
+###############################################################################################################
+#
+# compartment model
+# 
+###############################################################################################################
+class D_T_KCM(torch.nn.Module):
+    def __init__(self,im_L=1,requires_fv=False,device='cuda'):
+        super(D_T_KCM,self).__init__()
         self.device = device
-        self.inpParam = inpParam
         self.im_L = im_L
         self.requires_fv = requires_fv
+    
+    def prevent_zero(self,c,eps=1e-7):
+        c[torch.where( torch.logical_and(-eps<c,c<0) )] -= eps
+        c[torch.where( torch.logical_and(0<=c,c<eps) )] += eps
+        return c
+
+
+class D1T2KCM(D_T_KCM):
+    """  1 Tissue 2K compartment model  """
+    def __init__(self,im_L=1,requires_fv=False,device='cuda'):
+        super(D1T2KCM,self).__init__(im_L=im_L,requires_fv=requires_fv,device=device)
         self.k = self.paramInit()
 
     def paramInit(self):
@@ -46,20 +86,7 @@ class D1T2KCM(torch.nn.Module):
         p_ = torch.ones(nb_parameters,self.im_L,device=self.device) * 0.5
         return p_.requires_grad_(True)
 
-    def forward(self,t,method='analytical',interval=1/60):
-        """
-        1) For conventional methods, t: torch.tensor([]), return the activity at time 't'
-        """
-        p = self.inpParam
-        if method == 'analytical':
-            y = self.y_analytical(p,t)
-            if self.requires_fv:
-                y = ( 1 - self.k[2,:] ) * y + self.k[2,:] * fengInpFun(p,t).unsqueeze(1)
-        else:
-            print(" method = 'analytical' ")
-        return y
-
-    def y_analytical(self,p,t):
+    def analytical(self,p,t):
         t = t.unsqueeze(1)
         c1 = self.prevent_zero( p[3] + self.k[1,:] )
         c2 = p[1] / self.prevent_zero( p[4] + self.k[1,:] )
@@ -69,22 +96,15 @@ class D1T2KCM(torch.nn.Module):
                             + c2 * torch.exp( p[4] * t ) 
                             + c3 * torch.exp( p[5] * t )
                             + ( B - c2 - c3 ) * torch.exp( - self.k[1,:] * t ) )
+        if self.requires_fv:
+                y = ( 1 - self.k[2,:] ) * y + self.k[2,:] * fengInpFun(p,t).unsqueeze(1)
         return y
 
-    def prevent_zero(self,c,eps=1e-7):
-        c[torch.where( torch.logical_and(-eps<c,c<0) )] -= eps
-        c[torch.where( torch.logical_and(0<=c,c<eps) )] += eps
-        return c
 
-
-class D2T3KCM(torch.nn.Module):
+class D2T3KCM(D_T_KCM):
     """  2 Tissue 3K compartment model  """
-    def __init__(self,inpParam,im_L=1,requires_fv=False,device='cuda'):
-        super(D2T3KCM,self).__init__()
-        self.device = device
-        self.inpParam = inpParam
-        self.im_L = im_L
-        self.requires_fv = requires_fv
+    def __init__(self,im_L=1,requires_fv=False,device='cuda'):
+        super(D2T3KCM,self).__init__(im_L=im_L,requires_fv=requires_fv,device=device)
         self.k = self.paramInit()
 
     def paramInit(self):
@@ -92,218 +112,153 @@ class D2T3KCM(torch.nn.Module):
         p_ = torch.ones(nb_parameters,self.im_L,device=self.device) * 0.05
         return p_.requires_grad_(True)
     
-    def forward(self,t,method='analytical',interval=1/60):
-        """
-        1) For conventional methods, t: torch.tensor([]), return the activity at time 't'
-        2) For integral methods, t is cat(tS, tE[-1]), return the integral within two adjacent time points
-        """
-        p = self.inpParam
+    def macroParam(self):
         A2 = self.prevent_zero(self.k[1,:] + self.k[2,:])
         B1 = self.k[0,:] * self.k[2,:] / A2 
         B2 = self.k[0,:] * self.k[1,:] / A2
-        if method == 'analytical':
-            y = self.y_analytical(p,t,A2,B1,B2)
+        return A2,B1,B2
+    
+    def analytical(self,p,t,integral=False):
+        """
+        1) if integral=False, t is torch.tensor([]), return the activity at time 't'
+        2) if integral=True , t is cat(tS, tE[-1]),  return the integral within two adjacent time points
+        """
+        A2,B1,B2 = self.macroParam()
+        t = t.unsqueeze(1)
+        c2 = self.prevent_zero( A2 + p[3] )
+        c4 = self.prevent_zero( A2 + p[4] )
+        c6 = self.prevent_zero( A2 + p[5] )
+        D1 = ( p[0] + ( p[1] + p[2] ) * p[3] ) / p[3].pow(2)
+        D2 = ( p[0] + ( p[1] + p[2] ) * c2 ) / c2.pow(2)
+        if integral == False:
+            y = ( B1 * ( D1 - p[1] / p[4] - p[2] / p[5] )
+                + B2 * ( D2 - p[1] / c4 - p[2] / c6 ) * torch.exp( - A2 * t )
+                + ( p[0] * ( B1 / p[3] + B2 / c2 ) * t - B1 * D1 - B2 * D2 ) * torch.exp( p[3] * t )
+                + p[1] * ( B1 / p[4] + B2 / c4 ) * torch.exp( p[4] * t )
+                + p[2] * ( B1 / p[5] + B2 / c6 ) * torch.exp( p[5] * t ) )
             if self.requires_fv:
                 y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun(p,t).unsqueeze(1)
-        elif method == 'analytical_int':
-            y = self.y_anal_int(p,t,A2,B1,B2)
-            if self.requires_fv:
-                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun_int(p,t).unsqueeze(1)
-        elif method == 'numerical':
-            y = self.y_numerical(p,t,A2,B1,B2,interval=interval)
-            if self.requires_fv:
-                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun(p,t).unsqueeze(1)
-        elif method == 'numerical_int':
-            y = self.y_nume_int(p,t,A2,B1,B2,interval=interval)
-            if self.requires_fv:
-                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun_int(p,t).unsqueeze(1)
         else:
-            print(" method = 'analytical', 'analytical_int', 'numerical' or 'numerical_int' ")
-        return y
-    
-    def y_analytical(self,p,t,A2,B1,B2):
-        t = t.unsqueeze(1)
-        c2 = self.prevent_zero( A2 + p[3] )
-        c4 = self.prevent_zero( A2 + p[4] )
-        c6 = self.prevent_zero( A2 + p[5] )
-        D1 = ( p[0] + ( p[1] + p[2] ) * p[3] ) / p[3].pow(2)
-        D2 = ( p[0] + ( p[1] + p[2] ) * c2 ) / c2.pow(2)
-        y = ( B1 * ( D1 - p[1] / p[4] - p[2] / p[5] )
-            + B2 * ( D2 - p[1] / c4 - p[2] / c6 ) * torch.exp( - A2 * t )
-            + ( p[0] * ( B1 / p[3] + B2 / c2 ) * t - B1 * D1 - B2 * D2 ) * torch.exp( p[3] * t )
-            + p[1] * ( B1 / p[4] + B2 / c4 ) * torch.exp( p[4] * t )
-            + p[2] * ( B1 / p[5] + B2 / c6 ) * torch.exp( p[5] * t ) )
+            y = ( B1 * ( D1 - p[1] / p[4] - p[2] / p[5] ) * t
+                + B2 / A2 * ( p[1] / c4 + p[2] / c6 - D2 ) * ( torch.exp( - A2 * t ) - 1 )
+                + p[0] / p[3].pow(2) * ( B1 / p[3] + B2 / c2 ) * ( ( p[3] * t - 1 ) * torch.exp( p[3] * t ) + 1 )
+                - ( B1 * D1 + B2 * D2 ) / p[3] * ( torch.exp( p[3] * t ) - 1 )
+                + p[1] / p[4] * ( B1 / p[4] + B2 / c4 ) * ( torch.exp( p[4] * t ) - 1 )
+                + p[2] / p[5] * ( B1 / p[5] + B2 / c6 ) * ( torch.exp( p[5] * t ) - 1 ) )
+            y = y[1:,:] - y[:-1,:]
+            if self.requires_fv:
+                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun_int(p,t).unsqueeze(1)
         return y
 
-    def y_anal_int(self,p,t,A2,B1,B2):
-        t = t.unsqueeze(1)
-        c2 = self.prevent_zero( A2 + p[3] )
-        c4 = self.prevent_zero( A2 + p[4] )
-        c6 = self.prevent_zero( A2 + p[5] )
-        D1 = ( p[0] + ( p[1] + p[2] ) * p[3] ) / p[3].pow(2)
-        D2 = ( p[0] + ( p[1] + p[2] ) * c2 ) / c2.pow(2)
-        y = ( B1 * ( D1 - p[1] / p[4] - p[2] / p[5] ) * t
-            + B2 / A2 * ( p[1] / c4 + p[2] / c6 - D2 ) * ( torch.exp( - A2 * t ) - 1 )
-            + p[0] / p[3].pow(2) * ( B1 / p[3] + B2 / c2 ) * ( ( p[3] * t - 1 ) * torch.exp( p[3] * t ) + 1 )
-            - ( B1 * D1 + B2 * D2 ) / p[3] * ( torch.exp( p[3] * t ) - 1 )
-            + p[1] / p[4] * ( B1 / p[4] + B2 / c4 ) * ( torch.exp( p[4] * t ) - 1 )
-            + p[2] / p[5] * ( B1 / p[5] + B2 / c6 ) * ( torch.exp( p[5] * t ) - 1 ) )
-        return y[1:,:] - y[:-1,:]
-
-    def y_numerical(self,p,t,A2,B1,B2,interval=1/60):
+    def numerical(self,inp,t,interval=1/60,inpFun=fengInpFun):
+        """
+        1) if inpFun is fengInpFun, inp is the six parameters of fengInputFun
+        2) if inpFun is 
+        """
+        A2,B1,B2 = self.macroParam()
         tao = torch.arange(0,t[-1]+interval,interval,device=self.device).unsqueeze(1)
         g = B1 + B2 * torch.exp( - A2 * tao )
-        f = fengInpFun(p,tao)
+        f = inpFun(inp,tao)
         y = myConv1d(g,f,interval,t,method='efficient',device=self.device)
+        if self.requires_fv:
+            y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * inpFun(inp,t).unsqueeze(1)
         return y
 
-    def y_nume_int(self,p,t,A2,B1,B2,interval=1/60):
-        tao = torch.arange(0,t[-1]+interval,interval,device=self.device).unsqueeze(1)
-        g = B1 + B2 * torch.exp( - A2 * tao )
-        f = fengInpFun(p,tao)
-        y = myConv1d(g,f,interval,method='full',device=self.device)
-        y = subtrapz(y,tao,t[:-1],t[1:])
-        return y
-    
-    def prevent_zero(self,c,eps=1e-7):
-        c[torch.where( torch.logical_and(-eps<c,c<0) )] -= eps
-        c[torch.where( torch.logical_and(0<=c,c<eps) )] += eps
-        return c 
 
-
-class D2T4KCM(torch.nn.Module):
+class D2T4KCM(D_T_KCM):
     """  2 Tissue 4K compartment model  """
-    def __init__(self,inpParam,im_L=1,requires_fv=False,device='cuda'):
-        super(D2T4KCM,self).__init__()
-        self.device = device
-        self.inpParam = inpParam
-        self.im_L = im_L
-        self.requires_fv = requires_fv
+    def __init__(self,im_L=1,requires_fv=False,device='cuda'):
+        super(D2T4KCM,self).__init__(im_L=im_L,requires_fv=requires_fv,device=device)
         self.k = self.paramInit()
-
+    
     def paramInit(self):
         nb_parameters = 5 if self.requires_fv else 4 # [k1,k2,k3,k4] or [k1,k2,k3,k4,fv]
         p_ = torch.ones(nb_parameters,self.im_L,device=self.device) * 0.05
         p_[3,:] *= 0.1
         return p_.requires_grad_(True)
-    
-    def forward(self,t,method='analytical',interval=1/60):
-        """
-        1) For conventional methods, t: torch.tensor([]), return the activity at time 't'
-        2) For integral methods, t is cat(tS, tE[-1]), return the integral within two adjacent time points
-        """
-        p = self.inpParam
+
+    def macroParam(self):
         c_ = torch.sqrt( ( torch.square( self.k[1,:] + self.k[2,:] + self.k[3,:] ) - 4 * self.k[1,:] * self.k[3,:] ).clamp_(1e-7) )
         A1 = ( self.k[1,:] + self.k[2,:] + self.k[3,:] - c_ ) / 2
         A2 = ( self.k[1,:] + self.k[2,:] + self.k[3,:] + c_ ) / 2
         B1 = self.k[0,:] * ( self.k[2,:] + self.k[3,:] - A1 ) / c_
         B2 = self.k[0,:] * ( A2 - self.k[2,:] - self.k[3,:] ) / c_
-        if method == 'analytical':
-            y = self.y_analytical(p,t,A1,A2,B1,B2)
+        return A1,A2,B1,B2
+        
+    def analytical(self,p,t,integral=False):
+        """
+        1) if integral=False, t is torch.tensor([]), return the activity at time 't'
+        2) if integral=True , t is cat(tS, tE[-1]),  return the integral within two adjacent time points
+        """
+        A1,A2,B1,B2 = self.macroParam()
+        t = t.unsqueeze(1)
+        c1 = self.prevent_zero( A1 + p[3] )
+        c2 = self.prevent_zero( A2 + p[3] )
+        c3 = self.prevent_zero( A1 + p[4] )
+        c4 = self.prevent_zero( A2 + p[4] )
+        c5 = self.prevent_zero( A1 + p[5] )
+        c6 = self.prevent_zero( A2 + p[5] )
+        D1 = ( p[0] + ( p[1] + p[2] ) * c1 ) / c1.pow(2)
+        D2 = ( p[0] + ( p[1] + p[2] ) * c2 ) / c2.pow(2)
+        if integral == False:
+            y = ( B1 * ( D1 - p[1] / c3 - p[2] / c5 ) * torch.exp( - A1 * t )
+                + B2 * ( D2 - p[1] / c4 - p[2] / c6 ) * torch.exp( - A2 * t )
+                + ( p[0] * ( B1 / c1 + B2 / c2 ) * t - B1 * D1 - B2 * D2 ) * torch.exp( p[3] * t )
+                + p[1] * ( B1 / c3 + B2 / c4 ) * torch.exp( p[4] * t )
+                + p[2] * ( B1 / c5 + B2 / c6 ) * torch.exp( p[5] * t ) )
             if self.requires_fv:
                 y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun(p,t).unsqueeze(1)
-        elif method == 'analytical_int':
-            y = self.y_anal_int(p,t,A1,A2,B1,B2)
-            if self.requires_fv:
-                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun_int(p,t).unsqueeze(1)
-        elif method == 'numerical':
-            y = self.y_numerical(p,t,A1,A2,B1,B2,interval=interval)
-            if self.requires_fv:
-                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun(p,t).unsqueeze(1)
-        elif method == 'numerical_int':
-            y = self.y_nume_int(p,t,A1,A2,B1,B2,interval=interval)
-            if self.requires_fv:
-                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun_int(p,t).unsqueeze(1)
         else:
-            print(" method = 'analytical', 'analytical_int', 'numerical' or 'numerical_int' ")
+            y = ( B1 / A1 * ( p[1] / c3 + p[2] / c5 - D1 ) * ( torch.exp( - A1 * t ) - 1 )
+                + B2 / A2 * ( p[1] / c4 + p[2] / c6 - D2 ) * ( torch.exp( - A2 * t ) - 1 )
+                + p[0] / p[3].pow(2) * ( B1 / c1 + B2 / c2 ) * ( ( p[3] * t - 1 ) * torch.exp( p[3] * t ) + 1 )
+                - ( B1 * D1 + B2 * D2 ) / p[3] * ( torch.exp( p[3] * t ) - 1 )
+                + p[1] / p[4] * ( B1 / c3 + B2 / c4 ) * ( torch.exp( p[4] * t ) - 1 )
+                + p[2] / p[5] * ( B1 / c5 + B2 / c6 ) * ( torch.exp( p[5] * t ) - 1 ) )
+            y = y[1:,:] - y[:-1,:] # Returns the integral within two adjacent time points
+            if self.requires_fv:
+                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun_int(p,t).unsqueeze(1)
         return y
 
-    def y_analytical(self,p,t,A1,A2,B1,B2):
-        t = t.unsqueeze(1)
-        c1 = self.prevent_zero( A1 + p[3] )
-        c2 = self.prevent_zero( A2 + p[3] )
-        c3 = self.prevent_zero( A1 + p[4] )
-        c4 = self.prevent_zero( A2 + p[4] )
-        c5 = self.prevent_zero( A1 + p[5] )
-        c6 = self.prevent_zero( A2 + p[5] )
-        D1 = ( p[0] + ( p[1] + p[2] ) * c1 ) / c1.pow(2)
-        D2 = ( p[0] + ( p[1] + p[2] ) * c2 ) / c2.pow(2)
-        y = ( B1 * ( D1 - p[1] / c3 - p[2] / c5 ) * torch.exp( - A1 * t )
-            + B2 * ( D2 - p[1] / c4 - p[2] / c6 ) * torch.exp( - A2 * t )
-            + ( p[0] * ( B1 / c1 + B2 / c2 ) * t - B1 * D1 - B2 * D2 ) * torch.exp( p[3] * t )
-            + p[1] * ( B1 / c3 + B2 / c4 ) * torch.exp( p[4] * t )
-            + p[2] * ( B1 / c5 + B2 / c6 ) * torch.exp( p[5] * t ) )
-        return y
-
-    def y_anal_int(self,p,t,A1,A2,B1,B2):
-        t = t.unsqueeze(1)
-        c1 = self.prevent_zero( A1 + p[3] )
-        c2 = self.prevent_zero( A2 + p[3] )
-        c3 = self.prevent_zero( A1 + p[4] )
-        c4 = self.prevent_zero( A2 + p[4] )
-        c5 = self.prevent_zero( A1 + p[5] )
-        c6 = self.prevent_zero( A2 + p[5] )
-        D1 = ( p[0] + ( p[1] + p[2] ) * c1 ) / c1.pow(2)
-        D2 = ( p[0] + ( p[1] + p[2] ) * c2 ) / c2.pow(2)
-        y = ( B1 / A1 * ( p[1] / c3 + p[2] / c5 - D1 ) * ( torch.exp( - A1 * t ) - 1 )
-            + B2 / A2 * ( p[1] / c4 + p[2] / c6 - D2 ) * ( torch.exp( - A2 * t ) - 1 )
-            + p[0] / p[3].pow(2) * ( B1 / c1 + B2 / c2 ) * ( ( p[3] * t - 1 ) * torch.exp( p[3] * t ) + 1 )
-            - ( B1 * D1 + B2 * D2 ) / p[3] * ( torch.exp( p[3] * t ) - 1 )
-            + p[1] / p[4] * ( B1 / c3 + B2 / c4 ) * ( torch.exp( p[4] * t ) - 1 )
-            + p[2] / p[5] * ( B1 / c5 + B2 / c6 ) * ( torch.exp( p[5] * t ) - 1 ) )
-        return y[1:,:] - y[:-1,:] # Returns the integral within two adjacent time points
-
-    def y_numerical(self,p,t,A1,A2,B1,B2,interval=1/60):
+    def numerical(self,inp,t,interval=1/60,inpFun=fengInpFun):
+        """
+        1) if inpFun is fengInpFun, inp is the six parameters of fengInputFun
+        2) if inpFun is 
+        """
+        A1,A2,B1,B2 = self.macroParam()
         tao = torch.arange(0,t[-1]+interval,interval,device=self.device).unsqueeze(1)
         g = B1 * torch.exp( - A1 * tao ) + B2 * torch.exp( - A2 * tao )
-        f = fengInpFun(p,tao)
+        f = inpFun(inp,tao)
         y = myConv1d(g,f,interval,t,method='efficient',device=self.device)
+        if self.requires_fv:
+            y = ( 1-self.k[4,:] ) * y + self.k[4,:] * inpFun(inp,t).unsqueeze(1)
         return y
 
-    def y_nume_int(self,p,t,A1,A2,B1,B2,interval=1/60):
-        tao = torch.arange(0,t[-1]+interval,interval,device=self.device).unsqueeze(1)
-        g = B1 * torch.exp( - A1 * tao ) + B2 * torch.exp( - A2 * tao )
-        f = fengInpFun(p,tao)
-        y = myConv1d(g,f,interval,method='full',device=self.device)
-        y = subtrapz(y,tao,t[:-1],t[1:])
-        return y
 
-    def prevent_zero(self,c,eps=1e-7):
-        c[torch.where( torch.logical_and(-eps<c,c<0) )] -= eps
-        c[torch.where( torch.logical_and(0<=c,c<eps) )] += eps
-        return c
-
-
+###############################################################################################################
+#
+# linear model
+# 
+###############################################################################################################
 class Patlak(torch.nn.Module):
     """  inpParam: torch.tensor([]) or torch.tensor([],requires_grad=True) """
-    def __init__(self,inpParam,im_L=1,device='cuda'): 
+    def __init__(self,im_L=1,device='cuda'): 
         super(Patlak,self).__init__()
         self.device = device
         self.im_L = im_L
-        self.inpParam = inpParam
-        self.kibv = self.paramInit()
+        self.k = self.paramInit()
     
     def paramInit(self):
         p_ = torch.ones(2,self.im_L,device=self.device) * 0.2
         p_[0,:] *= 0.1
         return p_.requires_grad_(True)
-    
-    def forward(self,t):
-        p = self.inpParam
-        a = fengInpFun_int(p,t,from_zero=True)
-        b = fengInpFun(p,t)
-        return a.unsqueeze(1) * self.kibv[0,:] + b.unsqueeze(1) * self.kibv[1,:]
 
-    def pixelImaging(self,t,y):
+    def forward(self,Cpt_int,Cpt):
         """
-        input  --> t: [nb_frames]; y: [nb_frames, im_L]
-        output --> x: [2, im_L]
+        Cpt: linear part of input function
+        Cpt_int: linear part of integral of the input function from 0min 
         """
-        p = self.inpParam
-        A = torch.zeros(t.shape[0],2,device=device)
-        A[:,0] = fengInpFun_int(p,t,from_zero=True)
-        A[:,1] = fengInpFun(p,t)
-        return torch.mm( torch.mm( torch.mm( A.T, A ).inverse(), A.T ), y )
+        return Cpt_int.unsqueeze(1) * self.k[0,:] + Cpt.unsqueeze(1) * self.k[1,:]
 
 
 class Logan(torch.nn.Module):
@@ -317,7 +272,7 @@ class Logan(torch.nn.Module):
         p = torch.ones(2,self.im_L,device=self.device) * torch.tensor([[1.],[-1.]],device=self.device)
         return p.requires_grad_(True)
     
-    def forward(self,t,A,B):
+    def forward(self,A,B):
         """
         ordinary least square (OLS)
             A: linear part of ref_inte, 2D ( _ ,1)
@@ -331,6 +286,11 @@ class Logan(torch.nn.Module):
         return C
 
 
+###############################################################################################################
+#
+# other model
+# 
+###############################################################################################################
 class SRTM(torch.nn.Module):
     """  Simplified Reference Tissue Model: [R1,k2,BPND], cuda is not supported for now  """
     def __init__(self,im_L=1,device='cuda'):
