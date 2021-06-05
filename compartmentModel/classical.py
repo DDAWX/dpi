@@ -97,7 +97,7 @@ class D1T2KCM(D_T_KCM):
                             + c3 * torch.exp( p[5] * t )
                             + ( B - c2 - c3 ) * torch.exp( - self.k[1,:] * t ) )
         if self.requires_fv:
-                y = ( 1 - self.k[2,:] ) * y + self.k[2,:] * fengInpFun(p,t).unsqueeze(1)
+                y = ( 1 - self.k[2,:] ) * y + self.k[2,:] * fengInpFun(p,t)
         return y
 
 
@@ -137,7 +137,7 @@ class D2T3KCM(D_T_KCM):
                 + p[1] * ( B1 / p[4] + B2 / c4 ) * torch.exp( p[4] * t )
                 + p[2] * ( B1 / p[5] + B2 / c6 ) * torch.exp( p[5] * t ) )
             if self.requires_fv:
-                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun(p,t).unsqueeze(1)
+                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun(p,t)
         else:
             y = ( B1 * ( D1 - p[1] / p[4] - p[2] / p[5] ) * t
                 + B2 / A2 * ( p[1] / c4 + p[2] / c6 - D2 ) * ( torch.exp( - A2 * t ) - 1 )
@@ -147,7 +147,7 @@ class D2T3KCM(D_T_KCM):
                 + p[2] / p[5] * ( B1 / p[5] + B2 / c6 ) * ( torch.exp( p[5] * t ) - 1 ) )
             y = y[1:,:] - y[:-1,:]
             if self.requires_fv:
-                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun_int(p,t).unsqueeze(1)
+                y = ( 1 - self.k[3,:] ) * y + self.k[3,:] * fengInpFun_int(p,t)
         return y
 
     def numerical(self,inp,t,interval=1/60,inpFun=fengInpFun):
@@ -207,7 +207,7 @@ class D2T4KCM(D_T_KCM):
                 + p[1] * ( B1 / c3 + B2 / c4 ) * torch.exp( p[4] * t )
                 + p[2] * ( B1 / c5 + B2 / c6 ) * torch.exp( p[5] * t ) )
             if self.requires_fv:
-                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun(p,t).unsqueeze(1)
+                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun(p,t)
         else:
             y = ( B1 / A1 * ( p[1] / c3 + p[2] / c5 - D1 ) * ( torch.exp( - A1 * t ) - 1 )
                 + B2 / A2 * ( p[1] / c4 + p[2] / c6 - D2 ) * ( torch.exp( - A2 * t ) - 1 )
@@ -217,7 +217,7 @@ class D2T4KCM(D_T_KCM):
                 + p[2] / p[5] * ( B1 / c5 + B2 / c6 ) * ( torch.exp( p[5] * t ) - 1 ) )
             y = y[1:,:] - y[:-1,:] # Returns the integral within two adjacent time points
             if self.requires_fv:
-                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun_int(p,t).unsqueeze(1)
+                y = ( 1-self.k[4,:] ) * y + self.k[4,:] * fengInpFun_int(p,t)
         return y
 
     def numerical(self,inp,t,interval=1/60,inpFun=fengInpFun):
